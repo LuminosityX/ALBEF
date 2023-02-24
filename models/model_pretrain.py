@@ -5,7 +5,7 @@
  * For full license text, see LICENSE.txt file in the repo root or https://opensource.org/licenses/BSD-3-Clause
 '''
 
-from functools import partial
+from functools import partial                                         # 把一个函数的某些参数给固定住（也就是设置默认值），返回一个新的函数，调用这个新函数会更简单
 from models.vit import VisionTransformer, interpolate_pos_embed
 from models.xbert import BertConfig, BertForMaskedLM
 
@@ -18,7 +18,7 @@ import random
 
 
 class ALBEF(nn.Module):
-    def __init__(self,                 
+    def __init__(self,                                                # pretrain: config=config, text_encoder=args.text_encoder, tokenizer=tokenizer, init_deit=True
                  text_encoder = None,
                  tokenizer = None,
                  config = None,    
@@ -28,36 +28,59 @@ class ALBEF(nn.Module):
         super().__init__()
         
         self.tokenizer = tokenizer 
-        self.mlm_probability = config['mlm_probability']
-        embed_dim = config['embed_dim']
+        self.mlm_probability = config['mlm_probability']              # 0.15
+        embed_dim = config['embed_dim']                               # 256
      
         self.visual_encoder = VisionTransformer(
             img_size=config['image_res'], patch_size=16, embed_dim=768, depth=12, num_heads=12, 
             mlp_ratio=4, qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6))   
         
-        if init_deit:
+        if init_deit:                                                 # True
             checkpoint = torch.hub.load_state_dict_from_url(
                 url="https://dl.fbaipublicfiles.com/deit/deit_base_patch16_224-b5f2ef4d.pth",
-                map_location="cpu", check_hash=True)
+                map_location="cpu", check_hash=True)                  # check_hash : True,则文件名要加上hash值
             state_dict = checkpoint["model"]
             pos_embed_reshaped = interpolate_pos_embed(state_dict['pos_embed'], self.visual_encoder)
             state_dict['pos_embed'] = pos_embed_reshaped
-            msg = self.visual_encoder.load_state_dict(state_dict,strict=False)
+            msg = self.visual_encoder.load_state_dict(state_dict,strict=False)        # 这里ViT加载的是DeiT的权重
             print(msg)          
             
-        vision_width = config['vision_width']       
+        vision_width = config['vision_width']                         # 768
+        '''
+        {
+          "architectures": [
+            "BertForMaskedLM"
+          ],
+          "attention_probs_dropout_prob": 0.1,
+          "hidden_act": "gelu",
+          "hidden_dropout_prob": 0.1,
+          "hidden_size": 768,
+          "initializer_range": 0.02,
+          "intermediate_size": 3072,
+          "layer_norm_eps": 1e-12,
+          "max_position_embeddings": 512,
+          "model_type": "bert",
+          "num_attention_heads": 12,
+          "num_hidden_layers": 12,
+          "pad_token_id": 0,
+          "type_vocab_size": 2,
+          "vocab_size": 30522,
+          "fusion_layer": 6,
+          "encoder_width": 768
+        }
+        '''
         bert_config = BertConfig.from_json_file(config['bert_config'])
         
         self.text_encoder = BertForMaskedLM.from_pretrained(text_encoder, config=bert_config)      
 
-        text_width = self.text_encoder.config.hidden_size
-        self.vision_proj = nn.Linear(vision_width, embed_dim)
-        self.text_proj = nn.Linear(text_width, embed_dim)         
+        text_width = self.text_encoder.config.hidden_size             # 768
+        self.vision_proj = nn.Linear(vision_width, embed_dim)         # 768 -> 256
+        self.text_proj = nn.Linear(text_width, embed_dim)             # 768 -> 256
 
-        self.temp = nn.Parameter(torch.ones([]) * config['temp'])   
-        self.queue_size = config['queue_size']
-        self.momentum = config['momentum']  
-        self.itm_head = nn.Linear(text_width, 2)     
+        self.temp = nn.Parameter(torch.ones([]) * config['temp'])    # 0.07
+        self.queue_size = config['queue_size']                       # 65536
+        self.momentum = config['momentum']                           # 0.995
+        self.itm_head = nn.Linear(text_width, 2)                     # 768 -> 2
 
         # create momentum models
         self.visual_encoder_m = VisionTransformer(
@@ -65,7 +88,7 @@ class ALBEF(nn.Module):
             mlp_ratio=4, qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6)) 
         self.vision_proj_m = nn.Linear(vision_width, embed_dim)
         self.text_encoder_m = BertForMaskedLM.from_pretrained(text_encoder, config=bert_config)       
-        self.text_proj_m = nn.Linear(text_width, embed_dim)    
+        self.text_proj_m = nn.Linear(text_width, embed_dim)          # 与前面的都一致
         
         self.model_pairs = [[self.visual_encoder,self.visual_encoder_m],
                             [self.vision_proj,self.vision_proj_m],
@@ -73,10 +96,10 @@ class ALBEF(nn.Module):
                             [self.text_proj,self.text_proj_m],
                            ]
         
-        self.copy_params()
+        self.copy_params()                                          # 将原模型的权重复制到动量模型，并且将动量模型requires_grad = False
 
         # create the queue
-        self.register_buffer("image_queue", torch.randn(embed_dim, self.queue_size))
+        self.register_buffer("image_queue", torch.randn(embed_dim, self.queue_size))        # register_buffer 希望state_dicts保存该参数，但是该参数又不会更新
         self.register_buffer("text_queue", torch.randn(embed_dim, self.queue_size))
         self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))  
                              
