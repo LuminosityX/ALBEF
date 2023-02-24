@@ -14,9 +14,9 @@ from dataset.randaugment import RandomAugment
 def create_dataset(dataset, config):
     
     normalize = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
-    
+    # config['image_res'] = 256
     pretrain_transform = transforms.Compose([                        
-            transforms.RandomResizedCrop(config['image_res'],scale=(0.2, 1.0), interpolation=Image.BICUBIC),
+            transforms.RandomResizedCrop(config['image_res'],scale=(0.2, 1.0), interpolation=Image.BICUBIC),             # interpolation 插值法
             transforms.RandomHorizontalFlip(),
             RandomAugment(2,7,isPIL=True,augs=['Identity','AutoContrast','Equalize','Brightness','Sharpness',
                                               'ShearX', 'ShearY', 'TranslateX', 'TranslateY', 'Rotate']),     
@@ -37,9 +37,60 @@ def create_dataset(dataset, config):
         normalize,
         ])   
     
-    if dataset=='pretrain':
+    if dataset=='pretrain':                                                      # True
         dataset = pretrain_dataset(config['train_file'], pretrain_transform)                  
         return dataset      
+    
+    '''
+    def pre_caption(caption,max_words):
+        caption = re.sub(                                                       # re.sub  正则表达式的替换
+            r"([,.'!?\"()*#:;~])",
+            '',
+            caption.lower(),
+        ).replace('-', ' ').replace('/', ' ').replace('<person>', 'person')
+
+        caption = re.sub(
+            r"\s{2,}",
+            ' ',
+            caption,
+        )
+        caption = caption.rstrip('\n') 
+        caption = caption.strip(' ')
+
+        #truncate caption
+        caption_words = caption.split(' ')
+        if len(caption_words)>max_words:
+            caption = ' '.join(caption_words[:max_words])
+
+        return caption
+    
+    class pretrain_dataset(Dataset):
+        def __init__(self, ann_file, transform, max_words=30):        
+            self.ann = []
+            for f in ann_file:
+                self.ann += json.load(open(f,'r'))
+            self.transform = transform
+            self.max_words = max_words
+
+
+        def __len__(self):
+            return len(self.ann)
+
+
+        def __getitem__(self, index):    
+
+            ann = self.ann[index]
+
+            if type(ann['caption']) == list:
+                caption = pre_caption(random.choice(ann['caption']), self.max_words)
+            else:
+                caption = pre_caption(ann['caption'], self.max_words)
+
+            image = Image.open(ann['image']).convert('RGB')   
+            image = self.transform(image)
+
+            return image, caption
+    '''
                
     elif dataset=='re':          
         train_dataset = re_train_dataset(config['train_file'], train_transform, config['image_root'])
@@ -89,15 +140,15 @@ def vqa_collate_fn(batch):
     return torch.stack(image_list,dim=0), question_list, answer_list, torch.Tensor(weight_list), n
 
 
-def create_sampler(datasets, shuffles, num_tasks, global_rank):
+def create_sampler(datasets, shuffles, num_tasks, global_rank):                                  # datasets 本身就是list, [True], num_tasks, global_rank
     samplers = []
-    for dataset,shuffle in zip(datasets,shuffles):
+    for dataset,shuffle in zip(datasets,shuffles):                                               # 对于预训练就1个
         sampler = torch.utils.data.DistributedSampler(dataset, num_replicas=num_tasks, rank=global_rank, shuffle=shuffle)
         samplers.append(sampler)
     return samplers     
 
 
-def create_loader(datasets, samplers, batch_size, num_workers, is_trains, collate_fns):
+def create_loader(datasets, samplers, batch_size, num_workers, is_trains, collate_fns):          # datasets,samplers,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None]
     loaders = []
     for dataset,sampler,bs,n_worker,is_train,collate_fn in zip(datasets,samplers,batch_size,num_workers,is_trains,collate_fns):
         if is_train:
