@@ -87,7 +87,7 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
 def main(args, config):
     utils.init_distributed_mode(args)    
     
-    device = torch.device(args.device)
+    device = torch.device(args.device)                        # args.device = cuda,后面的使用类似.cuda() 因为前面已经torch.cuda.set_device了
 
     # fix the seed for reproducibility
     seed = args.seed + utils.get_rank()
@@ -97,8 +97,8 @@ def main(args, config):
     cudnn.benchmark = True
     
     start_epoch = 0
-    max_epoch = config['schedular']['epochs']
-    warmup_steps = config['schedular']['warmup_epochs']    
+    max_epoch = config['schedular']['epochs']                 # 30
+    warmup_steps = config['schedular']['warmup_epochs']       # 20
 
     #### Dataset #### 
     print("Creating dataset")
@@ -119,7 +119,7 @@ def main(args, config):
     print("Creating model")
     model = ALBEF(config=config, text_encoder=args.text_encoder, tokenizer=tokenizer, init_deit=True)
     
-    model = model.to(device)   
+    model = model.to(device)                                        # 类似于.cuda() 
         
     arg_opt = utils.AttrDict(config['optimizer'])
     optimizer = create_optimizer(arg_opt, model)
@@ -178,14 +178,42 @@ def main(args, config):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str)) 
     
-            
+
+ # python -m torch.distributed.launch --nproc_per_node=8 --use_env Pretrain.py --config ./configs/Pretrain.yaml --output_dir output/Pretrain 
+
+'''
+Pretrain.yaml
+
+train_file: ['data/coco.json',
+               'data/vg.json',
+               'data/cc12m.json',
+               'data/cc3m_train.json',
+               'data/cc3m_val.json',
+               'data/sbu.json'               
+               ]
+# each train_file (json) contains a python list where each item is {'image': img_path, 'caption': text or list_of_text }               
+bert_config: 'configs/config_bert.json'
+
+image_res: 256
+vision_width: 768
+embed_dim: 256
+batch_size: 64
+temp: 0.07
+mlm_probability: 0.15
+queue_size: 65536
+momentum: 0.995
+alpha: 0.4
+
+optimizer: {opt: adamW, lr: 1e-4, weight_decay: 0.02}
+schedular: {sched: cosine, lr: 1e-4, epochs: 30, min_lr: 1e-5, decay_rate: 1, warmup_lr: 1e-5, warmup_epochs: 20, cooldown_epochs: 0}
+'''
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='./configs/Pretrain.yaml')
     parser.add_argument('--checkpoint', default='') 
     parser.add_argument('--resume', default=False, type=bool)
-    parser.add_argument('--output_dir', default='Pretrain/')
+    parser.add_argument('--output_dir', default='Pretrain/')                                                # output/Pretrain
     parser.add_argument('--text_encoder', default='bert-base-uncased')
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--seed', default=42, type=int)
