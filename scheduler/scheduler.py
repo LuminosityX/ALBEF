@@ -16,41 +16,52 @@ class Scheduler:
     This family of schedulers is attempting to avoid the confusion of the meaning of 'last_epoch'
     and -1 values for special behaviour. All epoch and update counts must be tracked in the training
     code and explicitly passed in to the schedulers on the corresponding step or step_update call.
+    
+    一个调度器基类，可用于调度任何优化器参数组。
+    
+    与内置的PyTorch调度器不同，该调度器的目的是为了持续调用
+    * 在每个纪元结束时，在增加纪元计数之前，计算下一个纪元的值
+    * 在每次优化器更新结束时，在增加更新次数后，计算下一次更新的值。
+    ???
+    
+    建立在这个基础上的调度器应该尽量保持无状态（为了简单起见）。
+    
+    这个系列的调度器试图避免 "last_epoch "的含义和-1值的特殊行为的混淆。
+    所有的纪元和更新次数都必须在训练代码中跟踪，并在相应的步骤或step_update调用中明确传递给调度器。
 
     Based on ideas from:
      * https://github.com/pytorch/fairseq/tree/master/fairseq/optim/lr_scheduler
      * https://github.com/allenai/allennlp/tree/master/allennlp/training/learning_rate_schedulers
     """
-
     def __init__(self,
                  optimizer: torch.optim.Optimizer,
-                 param_group_field: str,
-                 noise_range_t=None,
-                 noise_type='normal',
-                 noise_pct=0.67,
-                 noise_std=1.0,
-                 noise_seed=None,
-                 initialize: bool = True) -> None:
+                 param_group_field: str,                  # 'lr'
+                 noise_range_t=None,                      # None
+                 noise_type='normal',                     # 'normal'
+                 noise_pct=0.67,                          # 0.67
+                 noise_std=1.0,                           # 1.0
+                 noise_seed=None,                         # 42
+                 initialize: bool = True) -> None:        # True
         self.optimizer = optimizer
-        self.param_group_field = param_group_field
-        self._initial_param_group_field = f"initial_{param_group_field}"
-        if initialize:
-            for i, group in enumerate(self.optimizer.param_groups):
+        self.param_group_field = param_group_field                                                        # 'lr'
+        self._initial_param_group_field = f"initial_{param_group_field}"                                  # 'initial_lr'
+        if initialize:                                                                                    # True
+            for i, group in enumerate(self.optimizer.param_groups):                                       # 该optimizer有两个groups
                 if param_group_field not in group:
                     raise KeyError(f"{param_group_field} missing from param_groups[{i}]")
-                group.setdefault(self._initial_param_group_field, group[param_group_field])
+                group.setdefault(self._initial_param_group_field, group[param_group_field])               # 字典中添加键值，这里添加了'initial_lr',值与'lr'相同
         else:
             for i, group in enumerate(self.optimizer.param_groups):
                 if self._initial_param_group_field not in group:
                     raise KeyError(f"{self._initial_param_group_field} missing from param_groups[{i}]")
-        self.base_values = [group[self._initial_param_group_field] for group in self.optimizer.param_groups]
+        self.base_values = [group[self._initial_param_group_field] for group in self.optimizer.param_groups] # 有两个值，应该都是1e-4
         self.metric = None  # any point to having this for all?
-        self.noise_range_t = noise_range_t
-        self.noise_pct = noise_pct
-        self.noise_type = noise_type
-        self.noise_std = noise_std
-        self.noise_seed = noise_seed if noise_seed is not None else 42
-        self.update_groups(self.base_values)
+        self.noise_range_t = noise_range_t                                                               # None
+        self.noise_pct = noise_pct                                                                       # 0.67
+        self.noise_type = noise_type                                                                     # 'normal'
+        self.noise_std = noise_std                                                                       # 1.0
+        self.noise_seed = noise_seed if noise_seed is not None else 42                                   # 42
+        self.update_groups(self.base_values)                                                             # 将optimizer中的'lr'更新一下，这里就是设为最初的'initial_lr'
 
     def state_dict(self) -> Dict[str, Any]:
         return {key: value for key, value in self.__dict__.items() if key != 'optimizer'}
