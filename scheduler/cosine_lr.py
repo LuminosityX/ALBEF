@@ -24,18 +24,35 @@ class CosineLRScheduler(Scheduler):
     Inspiration from
     https://github.com/allenai/allennlp/blob/master/allennlp/training/learning_rate_schedulers/cosine.py
     """
+    
+    '''
+            optimizer,
+            t_initial=num_epochs,                                  # 30 
+            t_mul=getattr(args, 'lr_cycle_mul', 1.),               # 1.
+            lr_min=args.min_lr,                                    # 1e-5
+            decay_rate=args.decay_rate,                            # 1
+            warmup_lr_init=args.warmup_lr,                         # 1e-5
+            warmup_t=args.warmup_epochs,                           # 20
+            cycle_limit=getattr(args, 'lr_cycle_limit', 1),        # 1
+            t_in_epochs=True,
+            noise_range_t=noise_range,                             # None
+            noise_pct=getattr(args, 'lr_noise_pct', 0.67),
+            noise_std=getattr(args, 'lr_noise_std', 1.),
+            noise_seed=getattr(args, 'seed', 42),
+        
+    '''
 
     def __init__(self,
                  optimizer: torch.optim.Optimizer,
-                 t_initial: int,
-                 t_mul: float = 1.,
-                 lr_min: float = 0.,
-                 decay_rate: float = 1.,
-                 warmup_t=0,
-                 warmup_lr_init=0,
-                 warmup_prefix=True,
-                 cycle_limit=0,
-                 t_in_epochs=True,
+                 t_initial: int,                                  # 30
+                 t_mul: float = 1.,                               # 1.
+                 lr_min: float = 0.,                              # 1e-5
+                 decay_rate: float = 1.,                          # 1
+                 warmup_t=0,                                      # 20
+                 warmup_lr_init=0,                                # 1e-5
+                 warmup_prefix=True,                              # True
+                 cycle_limit=0,                                   # 1
+                 t_in_epochs=True,                                # True
                  noise_range_t=None,
                  noise_pct=0.67,
                  noise_std=1.0,
@@ -60,9 +77,9 @@ class CosineLRScheduler(Scheduler):
         self.warmup_lr_init = warmup_lr_init
         self.warmup_prefix = warmup_prefix
         self.t_in_epochs = t_in_epochs
-        if self.warmup_t:
-            self.warmup_steps = [(v - warmup_lr_init) / self.warmup_t for v in self.base_values]           
-            super().update_groups(self.warmup_lr_init)
+        if self.warmup_t:                                                                                # 20
+            self.warmup_steps = [(v - warmup_lr_init) / self.warmup_t for v in self.base_values]         # (1e-4 - 1e-5)/20
+            super().update_groups(self.warmup_lr_init)                                                   # 将optimizer的'lr'设为了self.warmup_lr_init，即1e-5
         else:
             self.warmup_steps = [1 for _ in self.base_values]
 
