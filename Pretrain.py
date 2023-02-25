@@ -120,9 +120,25 @@ def main(args, config):
     model = ALBEF(config=config, text_encoder=args.text_encoder, tokenizer=tokenizer, init_deit=True)
     
     model = model.to(device)                                        # 类似于.cuda() 
-        
+    
+    # optimizer: {opt: adamW, lr: 1e-4, weight_decay: 0.02}
+    # schedular: {sched: cosine, lr: 1e-4, epochs: 30, min_lr: 1e-5, decay_rate: 1, warmup_lr: 1e-5, warmup_epochs: 20, cooldown_epochs: 0}
+    '''
+    class AttrDict(dict):
+        def __init__(self, *args, **kwargs):
+            super(AttrDict, self).__init__(*args, **kwargs)
+            self.__dict__ = self
+    '''
+    # ??? 这个AttrDict有什么用啊  -> 使得字典的调用直接变成属性的调用
     arg_opt = utils.AttrDict(config['optimizer'])
     optimizer = create_optimizer(arg_opt, model)
+    '''
+    optimizer = optim.AdamW(parameters, **opt_args)
+    parameters = [
+        {'params': no_decay, 'weight_decay': 0.},
+        {'params': decay, 'weight_decay': weight_decay}]
+    opt_args = dict(lr=args.lr, weight_decay=weight_decay)
+    '''
     arg_sche = utils.AttrDict(config['schedular'])
     lr_scheduler, _ = create_scheduler(arg_sche, optimizer)  
 
@@ -145,12 +161,12 @@ def main(args, config):
     model_without_ddp = model
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-        model_without_ddp = model.module    
+        model_without_ddp = model.module                                   # 这里的model已经外面封装了一层，所以要使用.module，才能运用到原来的model
     
     print("Start training")
     start_time = time.time()
 
-    for epoch in range(start_epoch, max_epoch):
+    for epoch in range(start_epoch, max_epoch):                            # 0 -> 30
         
         if epoch>0:
             lr_scheduler.step(epoch+warmup_steps)  
