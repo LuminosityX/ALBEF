@@ -22,13 +22,13 @@ except ImportError:
     has_apex = False
 
 
-def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
+def add_weight_decay(model, weight_decay=1e-5, skip_list=()):   # weight=0.02, skip_list = {'pos_embed', 'cls_token'} 是个set
     decay = []
     no_decay = []
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue  # frozen weights
-        if len(param.shape) == 1 or name.endswith(".bias") or name in skip_list:
+        if len(param.shape) == 1 or name.endswith(".bias") or name in skip_list:   # 将bn的参数与bias，还有skip_list的更新不用遵从weight_decay
             no_decay.append(param)
         else:
             decay.append(param)
@@ -36,12 +36,18 @@ def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
         {'params': no_decay, 'weight_decay': 0.},
         {'params': decay, 'weight_decay': weight_decay}]
 
-
+# optimizer: {opt: adamW, lr: 1e-4, weight_decay: 0.02}
 def create_optimizer(args, model, filter_bias_and_bn=True):
-    opt_lower = args.opt.lower()
-    weight_decay = args.weight_decay
+    opt_lower = args.opt.lower()                  # adamw
+    weight_decay = args.weight_decay              # 0.02
     if weight_decay and filter_bias_and_bn:
         skip = {}
+        '''
+        from ViT
+        @torch.jit.ignore
+        def no_weight_decay(self):
+            return {'pos_embed', 'cls_token'}
+        '''
         if hasattr(model, 'no_weight_decay'):
             skip = model.no_weight_decay()
         parameters = add_weight_decay(model, weight_decay, skip)
@@ -70,7 +76,7 @@ def create_optimizer(args, model, filter_bias_and_bn=True):
         optimizer = optim.SGD(parameters, momentum=args.momentum, nesterov=False, **opt_args)
     elif opt_lower == 'adam':
         optimizer = optim.Adam(parameters, **opt_args)
-    elif opt_lower == 'adamw':
+    elif opt_lower == 'adamw':                                            # True
         optimizer = optim.AdamW(parameters, **opt_args)
     elif opt_lower == 'nadam':
         optimizer = Nadam(parameters, **opt_args)
@@ -115,7 +121,7 @@ def create_optimizer(args, model, filter_bias_and_bn=True):
         assert False and "Invalid optimizer"
         raise ValueError
 
-    if len(opt_split) > 1:
+    if len(opt_split) > 1:                                               # False
         if opt_split[0] == 'lookahead':
             optimizer = Lookahead(optimizer)
 
