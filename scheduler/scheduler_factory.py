@@ -38,7 +38,7 @@ def create_scheduler(args, optimizer):
             noise_std=getattr(args, 'lr_noise_std', 1.),
             noise_seed=getattr(args, 'seed', 42),
         )
-        num_epochs = lr_scheduler.get_cycle_length() + args.cooldown_epochs
+        num_epochs = lr_scheduler.get_cycle_length() + args.cooldown_epochs           # 30 + 0
     elif args.sched == 'tanh':
         lr_scheduler = TanhLRScheduler(
             optimizer,
@@ -84,4 +84,4 @@ def create_scheduler(args, optimizer):
             noise_seed=getattr(args, 'seed', 42),
         )
 
-    return lr_scheduler, num_epochs
+    return lr_scheduler, num_epochs                   # CosineLRScheduler, 30
