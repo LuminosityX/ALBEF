@@ -45,20 +45,20 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
     header = 'Train Epoch: [{}]'.format(epoch)
     print_freq = 50   
     step_size = 100
-    warmup_iterations = warmup_steps*step_size  
+    warmup_iterations = warmup_steps*step_size                                                       # 20 * 100 ??? 啥意思
     
     if args.distributed:
-        data_loader.sampler.set_epoch(epoch)
+        data_loader.sampler.set_epoch(epoch)                                                         # 因为train_sampler中会根据epoch的量作为seed来进行shuffle，所以每个epoch需要
 
     for i, (image, text) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         
         optimizer.zero_grad()
   
-        image = image.to(device,non_blocking=True) 
+        image = image.to(device,non_blocking=True)                                                   # 与pin_memory有关的一项加速策略
 
         text_input = tokenizer(text, padding='longest', truncation=True, max_length=25, return_tensors="pt").to(device)  
         
-        if epoch>0:
+        if epoch>0:                                                                                  # 动量蒸馏的权重
             alpha = config['alpha']
         else:
             alpha = config['alpha']*min(1,i/len(data_loader)) 
@@ -75,7 +75,7 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
         metric_logger.update(loss_itm=loss_itm.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])         
         
-        if epoch==0 and i%step_size==0 and i<=warmup_iterations: 
+        if epoch==0 and i%step_size==0 and i<=warmup_iterations:                                  # 文中说的warm_up是1000个iteration，这里好像是2000个
             scheduler.step(i//step_size)         
         
     # gather the stats from all processes
@@ -140,7 +140,7 @@ def main(args, config):
     opt_args = dict(lr=args.lr, weight_decay=weight_decay)
     '''
     arg_sche = utils.AttrDict(config['schedular'])
-    lr_scheduler, _ = create_scheduler(arg_sche, optimizer)  
+    lr_scheduler, _ = create_scheduler(arg_sche, optimizer)         # CosineLRScheduler, 30
 
     
     if args.checkpoint:    
@@ -169,7 +169,7 @@ def main(args, config):
     for epoch in range(start_epoch, max_epoch):                            # 0 -> 30
         
         if epoch>0:
-            lr_scheduler.step(epoch+warmup_steps)  
+            lr_scheduler.step(epoch+warmup_steps)                         # epoch + 20   因为在epoch=0的train中会完成所有的warm_up过程，而后面的epoch就都是cosine了，所以需要加上warmup_epoch
             
         train_stats = train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device, lr_scheduler, config) 
         if utils.is_main_process():  
