@@ -63,36 +63,7 @@ def create_dataset(dataset, config):
             caption = ' '.join(caption_words[:max_words])
 
         return caption
-    
-    class pretrain_dataset(Dataset):
-        def __init__(self, ann_file, transform, max_words=30):        
-            self.ann = []
-            for f in ann_file:
-                self.ann += json.load(open(f,'r'))
-            self.transform = transform
-            self.max_words = max_words
-
-
-        def __len__(self):
-            return len(self.ann)
-
-
-        def __getitem__(self, index):    
-
-            ann = self.ann[index]
-
-            if type(ann['caption']) == list:
-                caption = pre_caption(random.choice(ann['caption']), self.max_words)
-            else:
-                caption = pre_caption(ann['caption'], self.max_words)
-
-            image = Image.open(ann['image']).convert('RGB')   
-            image = self.transform(image)
-
-            return image, caption
-    '''
-    
-    '''
+        
     class re_train_dataset(Dataset):
         def __init__(self, ann_file, transform, image_root, max_words=30):        
             self.ann = []
@@ -212,13 +183,18 @@ def vqa_collate_fn(batch):
 
 def create_sampler(datasets, shuffles, num_tasks, global_rank):                                  # datasets 本身就是list, [True], num_tasks, global_rank
     samplers = []
-    for dataset,shuffle in zip(datasets,shuffles):                                               # 对于预训练就1个
+    for dataset,shuffle in zip(datasets,shuffles):                                               # 对于Retrieval也是就1个，但是是因为eval不需要sampler
         sampler = torch.utils.data.DistributedSampler(dataset, num_replicas=num_tasks, rank=global_rank, shuffle=shuffle)
         samplers.append(sampler)
     return samplers     
 
 
-def create_loader(datasets, samplers, batch_size, num_workers, is_trains, collate_fns):          # datasets,samplers,batch_size=[config['batch_size']], num_workers=[4], is_trains=[True], collate_fns=[None]
+def create_loader(datasets, samplers, batch_size, num_workers, is_trains, collate_fns):          
+    '''[train_dataset, val_dataset, test_dataset],samplers,
+       batch_size=[config['batch_size_train']]+[config['batch_size_test']]*2,  # 32, 64, 54
+       num_workers=[4,4,4],
+       is_trains=[True, False, False], 
+       collate_fns=[None,None,None]'''
     loaders = []
     for dataset,sampler,bs,n_worker,is_train,collate_fn in zip(datasets,samplers,batch_size,num_workers,is_trains,collate_fns):
         if is_train:
