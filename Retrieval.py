@@ -36,7 +36,7 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
     header = 'Train Epoch: [{}]'.format(epoch)
     print_freq = 50
     step_size = 100
-    warmup_iterations = warmup_steps*step_size  
+    warmup_iterations = warmup_steps*step_size                                                                      # 1*100
     
     for i,(image, text, idx) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         image = image.to(device,non_blocking=True)   
@@ -59,7 +59,7 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
         metric_logger.update(loss_ita=loss_ita.item())
         metric_logger.update(lr=optimizer.param_groups[0]["lr"])
         if epoch==0 and i%step_size==0 and i<=warmup_iterations: 
-            scheduler.step(i//step_size)         
+            scheduler.step(i//step_size)                                                                         # 100个iteration就完成warm_up
         
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -224,10 +224,10 @@ def itm_eval(scores_i2t, scores_t2i, txt2img, img2txt):
 def main(args, config):
     utils.init_distributed_mode(args)    
     
-    device = torch.device(args.device)
+    device = torch.device(args.device)                                                                                              # 就是cuda，前面设置了set_device
 
     # fix the seed for reproducibility
-    seed = args.seed + utils.get_rank()
+    seed = args.seed + utils.get_rank()                                                                                             # 42 + rank
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -235,17 +235,17 @@ def main(args, config):
 
     #### Dataset #### 
     print("Creating retrieval dataset")
-    train_dataset, val_dataset, test_dataset = create_dataset('re', config)  
+    train_dataset, val_dataset, test_dataset = create_dataset('re', config)                                                     
 
     if args.distributed:
         num_tasks = utils.get_world_size()
         global_rank = utils.get_rank()            
-        samplers = create_sampler([train_dataset], [True], num_tasks, global_rank) + [None, None]
+        samplers = create_sampler([train_dataset], [True], num_tasks, global_rank) + [None, None]                                 # 与预训练的区别，预训练的只有训练集，而没有测试
     else:
         samplers = [None, None, None]
     
     train_loader, val_loader, test_loader = create_loader([train_dataset, val_dataset, test_dataset],samplers,
-                                                          batch_size=[config['batch_size_train']]+[config['batch_size_test']]*2,
+                                                          batch_size=[config['batch_size_train']]+[config['batch_size_test']]*2,  # 32, 64, 54
                                                           num_workers=[4,4,4],
                                                           is_trains=[True, False, False], 
                                                           collate_fns=[None,None,None])   
@@ -254,7 +254,7 @@ def main(args, config):
 
     #### Model #### 
     print("Creating model")
-    model = ALBEF(config=config, text_encoder=args.text_encoder, tokenizer=tokenizer)
+    model = ALBEF(config=config, text_encoder=args.text_encoder, tokenizer=tokenizer)                                            # 与预训练相比，init_deit没有设置，因为后面有checkpoint，但init_deit默认设置为True
     
     if args.checkpoint:    
         checkpoint = torch.load(args.checkpoint, map_location='cpu') 
@@ -283,21 +283,25 @@ def main(args, config):
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module   
+        
+    # optimizer: {opt: adamW, lr: 1e-5, weight_decay: 0.02} 
+    # schedular: {sched: cosine, lr: 1e-5, epochs: 10, min_lr: 1e-6, decay_rate: 1, warmup_lr: 1e-5, warmup_epochs: 1, cooldown_epochs: 0}
     
+    # 与预训练的optim, scheduler类似
     arg_opt = utils.AttrDict(config['optimizer'])
     optimizer = create_optimizer(arg_opt, model)
     arg_sche = utils.AttrDict(config['schedular'])
     lr_scheduler, _ = create_scheduler(arg_sche, optimizer)  
     
-    max_epoch = config['schedular']['epochs']
-    warmup_steps = config['schedular']['warmup_epochs']
+    max_epoch = config['schedular']['epochs']                                            # 10
+    warmup_steps = config['schedular']['warmup_epochs']                                  # 1
     best = 0
     best_epoch = 0
 
     print("Start training")
     start_time = time.time()    
     for epoch in range(0, max_epoch):
-        if not args.evaluate:
+        if not args.evaluate:                                                           # True
             if args.distributed:
                 train_loader.sampler.set_epoch(epoch)
             train_stats = train(model, train_loader, optimizer, tokenizer, epoch, warmup_steps, device, lr_scheduler, config)  
@@ -355,11 +359,49 @@ def main(args, config):
         with open(os.path.join(args.output_dir, "log.txt"),"a") as f:
             f.write("best epoch: %d"%best_epoch)               
 
+'''          
+python -m torch.distributed.launch --nproc_per_node=8 --use_env Retrieval.py \
+--config ./configs/Retrieval_flickr.yaml \
+--output_dir output/Retrieval_flickr \
+--checkpoint [Pretrained checkpoint]
+
+Retrieval_flickr.yaml
+
+train_file:  ['data/flickr30k_train.json']
+val_file: 'data/flickr30k_val.json'                
+test_file: 'data/flickr30k_test.json'
+
+train json format:{"image": "flickr30k-images/1000092795.jpg", "caption": "Two young guys with shaggy hair look at their hands while hanging out in the yard.", "image_id": 0}
+eval json format: {"image": "flickr30k-images/1018148011.jpg", "caption": ["A group of people stand in the back of a truck filled with cotton.", "Men are '']}
+
+image_root: '/export/share/datasets/vision/flickr30k/' #flickr30k-images/
+
+bert_config: 'configs/config_bert.json'
+
+image_res: 384
+batch_size_train: 32
+batch_size_test: 64
+
+queue_size: 65536
+momentum: 0.995
+vision_width: 768
+embed_dim: 256
+temp: 0.07
+k_test: 128
+
+alpha: 0.4
+distill: True
+warm_up: True
+
+optimizer: {opt: adamW, lr: 1e-5, weight_decay: 0.02} 
+schedular: {sched: cosine, lr: 1e-5, epochs: 10, min_lr: 1e-6, decay_rate: 1, warmup_lr: 1e-5, warmup_epochs: 1, cooldown_epochs: 0}
+'''
+
             
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()     
     parser.add_argument('--config', default='./configs/Retrieval_flickr.yaml')
-    parser.add_argument('--output_dir', default='output/Retrieval_flickr')        
+    parser.add_argument('--output_dir', default='output/Retrieval_flickr')                                 # output/Retrieval_flickr 
     parser.add_argument('--checkpoint', default='')   
     parser.add_argument('--text_encoder', default='bert-base-uncased')
     parser.add_argument('--evaluate', action='store_true')
