@@ -91,8 +91,78 @@ def create_dataset(dataset, config):
 
             return image, caption
     '''
-               
-    elif dataset=='re':          
+    
+    '''
+    class re_train_dataset(Dataset):
+        def __init__(self, ann_file, transform, image_root, max_words=30):        
+            self.ann = []
+            for f in ann_file:                                                  # train_file 是一个list
+                self.ann += json.load(open(f,'r'))
+            self.transform = transform
+            self.image_root = image_root
+            self.max_words = max_words
+            self.img_ids = {}   
+
+            n = 0
+            for ann in self.ann:
+                img_id = ann['image_id']
+                if img_id not in self.img_ids.keys():
+                    self.img_ids[img_id] = n
+                    n += 1    
+
+        def __len__(self):
+            return len(self.ann)
+
+        def __getitem__(self, index):    
+
+            ann = self.ann[index]
+
+            image_path = os.path.join(self.image_root,ann['image'])        
+            image = Image.open(image_path).convert('RGB')   
+            image = self.transform(image)
+
+            caption = pre_caption(ann['caption'], self.max_words)           # max_words = 30
+
+            return image, caption, self.img_ids[ann['image_id']]
+    
+    
+
+    class re_eval_dataset(Dataset):
+        def __init__(self, ann_file, transform, image_root, max_words=30):        
+            self.ann = json.load(open(ann_file,'r'))
+            self.transform = transform
+            self.image_root = image_root
+            self.max_words = max_words 
+
+            self.text = []
+            self.image = []
+            self.txt2img = {}
+            self.img2txt = {}
+
+            txt_id = 0
+            for img_id, ann in enumerate(self.ann):
+                self.image.append(ann['image'])
+                self.img2txt[img_id] = []
+                for i, caption in enumerate(ann['caption']):
+                    self.text.append(pre_caption(caption,self.max_words))
+                    self.img2txt[img_id].append(txt_id)
+                    self.txt2img[txt_id] = img_id
+                    txt_id += 1
+
+        def __len__(self):
+            return len(self.image)
+
+        def __getitem__(self, index):    
+
+            image_path = os.path.join(self.image_root, self.ann[index]['image'])        
+            image = Image.open(image_path).convert('RGB')    
+            image = self.transform(image)  
+
+            return image, index                                          # 只返回image ???
+    '''
+    
+    # 在Flickr的json中，train与eval的不同
+    elif dataset=='re':   
         train_dataset = re_train_dataset(config['train_file'], train_transform, config['image_root'])
         val_dataset = re_eval_dataset(config['val_file'], test_transform, config['image_root'])  
         test_dataset = re_eval_dataset(config['test_file'], test_transform, config['image_root'])                
