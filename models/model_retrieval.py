@@ -6,6 +6,34 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+'''
+Retrieval_flickr.yaml
+train_file:  ['data/flickr30k_train.json']
+val_file: 'data/flickr30k_val.json'                
+test_file: 'data/flickr30k_test.json'
+
+train json format:{"image": "flickr30k-images/1000092795.jpg", "caption": "Two young guys with shaggy hair look at their hands while hanging out in the yard.", "image_id": 0}
+eval json format: {"image": "flickr30k-images/1018148011.jpg", "caption": ["A group of people stand in the back of a truck filled with cotton.", "Men are '']}
+
+image_root: '/export/share/datasets/vision/flickr30k/' #flickr30k-images/
+bert_config: 'configs/config_bert.json'
+image_res: 384
+batch_size_train: 32
+batch_size_test: 64
+queue_size: 65536
+momentum: 0.995
+vision_width: 768
+embed_dim: 256
+temp: 0.07
+k_test: 128
+alpha: 0.4
+distill: True
+warm_up: True
+optimizer: {opt: adamW, lr: 1e-5, weight_decay: 0.02} 
+schedular: {sched: cosine, lr: 1e-5, epochs: 10, min_lr: 1e-6, decay_rate: 1, warmup_lr: 1e-5, warmup_epochs: 1, cooldown_epochs: 0}
+'''
+
+# config=config, text_encoder=args.text_encoder, tokenizer=tokenizer
 class ALBEF(nn.Module):
     def __init__(self,                 
                  text_encoder = None,
@@ -15,24 +43,47 @@ class ALBEF(nn.Module):
         super().__init__()
         
         self.tokenizer = tokenizer 
-        self.distill = config['distill']
-        embed_dim = config['embed_dim']        
-        vision_width = config['vision_width']  
-        self.visual_encoder = VisionTransformer(
+        self.distill = config['distill']                                                                           # True
+        embed_dim = config['embed_dim']                                                                            # 256
+        vision_width = config['vision_width']                                                                      # 768
+        self.visual_encoder = VisionTransformer(                                                                   # 与预训练的一致，除了img_size为384
             img_size=config['image_res'], patch_size=16, embed_dim=768, depth=12, num_heads=12, 
             mlp_ratio=4, qkv_bias=True, norm_layer=partial(nn.LayerNorm, eps=1e-6))    
 
         bert_config = BertConfig.from_json_file(config['bert_config'])
-        self.text_encoder = BertModel.from_pretrained(text_encoder, config=bert_config, add_pooling_layer=False)      
+        '''
+        {
+          "architectures": [
+            "BertForMaskedLM"
+          ],
+          "attention_probs_dropout_prob": 0.1,
+          "hidden_act": "gelu",
+          "hidden_dropout_prob": 0.1,
+          "hidden_size": 768,
+          "initializer_range": 0.02,
+          "intermediate_size": 3072,
+          "layer_norm_eps": 1e-12,
+          "max_position_embeddings": 512,
+          "model_type": "bert",
+          "num_attention_heads": 12,
+          "num_hidden_layers": 12,
+          "pad_token_id": 0,
+          "type_vocab_size": 2,
+          "vocab_size": 30522,
+          "fusion_layer": 6,
+          "encoder_width": 768
+        }
+        '''
+        self.text_encoder = BertModel.from_pretrained(text_encoder, config=bert_config, add_pooling_layer=False)   # 不是BertForMaskedLM了，但bert_config还是一样的
 
-        text_width = self.text_encoder.config.hidden_size
-        self.vision_proj = nn.Linear(vision_width, embed_dim)
-        self.text_proj = nn.Linear(text_width, embed_dim)   
+        text_width = self.text_encoder.config.hidden_size                                                          # 768
+        self.vision_proj = nn.Linear(vision_width, embed_dim)                                                      # 768 -> 256
+        self.text_proj = nn.Linear(text_width, embed_dim)                                                          # 768 -> 256
 
-        self.temp = nn.Parameter(torch.ones([]) * config['temp'])   
-        self.queue_size = config['queue_size']
-        self.momentum = config['momentum']  
-        self.itm_head = nn.Linear(text_width, 2) 
+        self.temp = nn.Parameter(torch.ones([]) * config['temp'])                                                  # 0.07
+        self.queue_size = config['queue_size']                                                                     # 65536
+        self.momentum = config['momentum']                                                                         # 0.995
+        self.itm_head = nn.Linear(text_width, 2)                                                                   # 768 -> 2
         
         # create momentum models
         self.visual_encoder_m = VisionTransformer(
@@ -50,30 +101,34 @@ class ALBEF(nn.Module):
         self.copy_params()
 
         # create the queue
-        self.register_buffer("image_queue", torch.randn(embed_dim, self.queue_size))
+        self.register_buffer("image_queue", torch.randn(embed_dim, self.queue_size))                             # [256, 65536]
         self.register_buffer("text_queue", torch.randn(embed_dim, self.queue_size))
-        self.register_buffer("idx_queue", torch.full((1,self.queue_size),-100))
+        
+        # 与预训练的关键不同就在于'idx_queue'，该量用来判断是否还有相同标签的样本，即是否来自同一个图像，，因为flickr中是一个图像对5个文本
+        
+        
+        self.register_buffer("idx_queue", torch.full((1,self.queue_size),-100))                                  # [1, 65536] 全是-100  ，为了找出动量模型中img相同的，因为flickr中是一个图像对5个文本
         self.register_buffer("queue_ptr", torch.zeros(1, dtype=torch.long))  
 
         self.image_queue = nn.functional.normalize(self.image_queue, dim=0)
         self.text_queue = nn.functional.normalize(self.text_queue, dim=0)
         
 
-    def forward(self, image, text, alpha, idx):
+    def forward(self, image, text, alpha, idx):                                                                  # idx应该是img_id
         
-        image_embeds = self.visual_encoder(image) 
-        image_atts = torch.ones(image_embeds.size()[:-1],dtype=torch.long).to(image.device)
+        image_embeds = self.visual_encoder(image)                                                                # [batch_size, patch_number, dim]
+        image_atts = torch.ones(image_embeds.size()[:-1],dtype=torch.long).to(image.device)                      # [batch_size, patch_number]
 
-        image_feat = F.normalize(self.vision_proj(image_embeds[:,0,:]),dim=-1) 
+        image_feat = F.normalize(self.vision_proj(image_embeds[:,0,:]),dim=-1)                                   # [batch_size, 256]
         text_output = self.text_encoder(text.input_ids, attention_mask = text.attention_mask,                      
                                         return_dict = True, mode = 'text')            
         text_embeds = text_output.last_hidden_state
-        text_feat = F.normalize(self.text_proj(text_embeds[:,0,:]),dim=-1)                 
+        text_feat = F.normalize(self.text_proj(text_embeds[:,0,:]),dim=-1)                                       # [b, 256]
 
-        idx = idx.view(-1,1)
+        idx = idx.view(-1,1)                                                                                     # [b, 1]
         idx_all = torch.cat([idx.t(), self.idx_queue.clone().detach()],dim=1)  
-        pos_idx = torch.eq(idx, idx_all).float()       
-        sim_targets = pos_idx / pos_idx.sum(1,keepdim=True)     
+        pos_idx = torch.eq(idx, idx_all).float()                                                                 # [b, 65536+b] 找出动量模型中img相同的，因为flickr中是一个图像对5个文本
+        sim_targets = pos_idx / pos_idx.sum(1,keepdim=True)                                                      # 后面计算交叉熵时，平均下
 
         with torch.no_grad():
             self._momentum_update()
@@ -95,7 +150,10 @@ class ALBEF(nn.Module):
         sim_i2t = image_feat @ text_feat_all / self.temp 
         sim_t2i = text_feat @ image_feat_all / self.temp           
 
-        if self.distill:
+        if self.distill:                                                                                       # true
+            # sim_i2t_targets = alpha * F.softmax(sim_i2t_m, dim=1) + (1 - alpha) * sim_targets
+            # F.log_softmax(sim_i2t, dim=1)   *  alpha * F.softmax(sim_i2t_m, dim=1)    为动量蒸馏 损失，文中说的是KL散度，但这里应该算的是交叉熵
+            # F.log_softmax(sim_i2t, dim=1)   *  (1 - alpha) * sim_targets  这里算的应该就是ITC的损失函数，就是交叉熵损失函数
             loss_i2t = -torch.sum(F.log_softmax(sim_i2t, dim=1)*sim_i2t_targets,dim=1).mean()
             loss_t2i = -torch.sum(F.log_softmax(sim_t2i, dim=1)*sim_t2i_targets,dim=1).mean() 
         else:
@@ -117,18 +175,18 @@ class ALBEF(nn.Module):
                                        )            
         with torch.no_grad():
             bs = image.size(0)      
-            weights_i2t = F.softmax(sim_i2t[:,:bs]+1e-4,dim=1)
+            weights_i2t = F.softmax(sim_i2t[:,:bs]+1e-4,dim=1)               # 重新计算一下，前面得到该batch的sims
             weights_t2i = F.softmax(sim_t2i[:,:bs]+1e-4,dim=1)
 
             mask = torch.eq(idx, idx.T)
-            weights_i2t.masked_fill_(mask, 0)
+            weights_i2t.masked_fill_(mask, 0)                                # 不仅把对角线置为了0，还把相同img也置为了0
             weights_t2i.masked_fill_(mask, 0) 
 
         # select a negative image for each text
         image_embeds_neg = []    
         for b in range(bs):
-            neg_idx = torch.multinomial(weights_t2i[b], 1).item()
-            image_embeds_neg.append(image_embeds[neg_idx])
+            neg_idx = torch.multinomial(weights_t2i[b], 1).item()            # 从tensor的每一行中采样，第一个参数就是采样的概率，第二个参数就是采样的个数，返回indice
+            image_embeds_neg.append(image_embeds[neg_idx])                   # 直接取出每一个text的negative image features
         image_embeds_neg = torch.stack(image_embeds_neg,dim=0)   
 
         # select a negative text for each image
@@ -143,6 +201,8 @@ class ALBEF(nn.Module):
 
         text_embeds_all = torch.cat([text_embeds, text_embeds_neg],dim=0)     
         text_atts_all = torch.cat([text.attention_mask, text_atts_neg],dim=0)     
+        
+        # *** 注意，这里图像文本，所对应的cat是反的，text_embeds对image_embeds_neg， text_embeds_neg对的是image_embeds
 
         image_embeds_all = torch.cat([image_embeds_neg,image_embeds],dim=0)
         image_atts_all = torch.cat([image_atts,image_atts],dim=0)
@@ -155,8 +215,8 @@ class ALBEF(nn.Module):
                                         mode = 'fusion',
                                        )                         
 
-        vl_embeddings = torch.cat([output_pos.last_hidden_state[:,0,:], output_neg.last_hidden_state[:,0,:]],dim=0)
-        vl_output = self.itm_head(vl_embeddings)            
+        vl_embeddings = torch.cat([output_pos.last_hidden_state[:,0,:], output_neg.last_hidden_state[:,0,:]],dim=0)   # [3b, 768]
+        vl_output = self.itm_head(vl_embeddings)                                                                      # [3b, 2]         
 
         itm_labels = torch.cat([torch.ones(bs,dtype=torch.long),torch.zeros(2*bs,dtype=torch.long)],
                                dim=0).to(image.device)
